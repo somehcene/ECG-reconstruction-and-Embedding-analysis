@@ -1,0 +1,28 @@
+# Core
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+
+# Visualization
+matplotlib>=3.6
+seaborn>=0.12
+
+# Machine Learning
+scikit-learn>=1.2
+
+# Deep Learning
+torch>=2.0
+torchvision>=0.15
+
+# ECG / signal processing
+wfdb>=4.1
+
+# Dimensionality reduction (Part 2)
+umap-learn>=0.5
+
+# Notebook
+jupyter>=1.0
+ipykernel>=6.0
+
+# Utilities
+tqdm>=4.65
