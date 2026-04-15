@@ -143,7 +143,12 @@ def test_autoencoder(model, test_loader, device="cuda"):
 
             signals = signals.to(device)
 
-            input_lead = signals[:, 0:1, :]
+            lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+
+            input_lead = torch.stack([
+                signals[i, idx:idx+1, :]
+                for i, idx in enumerate(lead_idx)
+            ])
             target = signals
 
             pred, _ = model(input_lead)

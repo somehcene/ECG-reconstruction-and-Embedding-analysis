@@ -74,7 +74,7 @@ class UpBlock(nn.Module):
 class UNet1D(nn.Module):
     def __init__(self, in_channels=1, out_channels=12, embedding_dim=32):
         super().__init__()
-
+        self.out_channels = out_channels
         self.embedding_dim = embedding_dim
 
         # Encoder
@@ -92,57 +92,44 @@ class UNet1D(nn.Module):
         self.up2 = UpBlock(128 + 64, 64)
         self.up1 = UpBlock(64 + 32, 32)
 
-        # Reconstruction head (signals)
-        self.out_conv = nn.Conv1d(32, out_channels, kernel_size=1)
+        
+        # separate features for each lead (12 * 32 = 384 channels)
+        self.lead_features = nn.Conv1d(32, out_channels * embedding_dim, kernel_size=1)
 
-        # Embedding head
-        self.embedding_head = nn.Conv1d(32, out_channels * embedding_dim, kernel_size=1)
+        # groups=out_channels (groups=12).
+        # the network is using only the 32 channels of the lead i to generate the signals (lead) i 
+        self.signal_head = nn.Conv1d(
+            in_channels = out_channels * embedding_dim, 
+            out_channels = out_channels, 
+            kernel_size = 1, 
+            groups = out_channels
+        )
 
     def forward(self, x):
-        """
-        Input:
-            x: (B, 1, T)
-
-        Returns:
-            signals: (B, 12, T)
-            embeddings: (B, 12, embedding_dim)
-        """
-
-        # Encoder
+        # Encoder & Decoder
         x, s1 = self.down1(x)
         x, s2 = self.down2(x)
         x, s3 = self.down3(x)
         x, s4 = self.down4(x)
-
-        # Bottleneck
-        x = self.bottleneck(x)
-
-        # Decoder
-        x = self.up4(x, s4)
+        x = self.bottleneck(x) 
+        x = self.up4(x, s4) 
         x = self.up3(x, s3)
         x = self.up2(x, s2)
-        x = self.up1(x, s1)
+        x = self.up1(x, s1) # Shape: (B, 32, T) 
 
-       
-        # SHARED FEATURES
+        # features per lead 
+        lead_feat = self.lead_features(x)  # Shape: (B, 12*d, T)
         
-        features = x  # (B, 32, T)
+        # (1) signal reco (the actually supervised part)
+        signals = self.signal_head(lead_feat) # Shape: (B, 12, T)
 
+        # (2) Embeddings (self supervised by learning to reconstruct the signal)
+        B, _, T = lead_feat.shape
+
+        # we separate explicitly the dimension is the leads (12) and the embeddings (d)
+        lead_feat_reshaped = lead_feat.view(B, self.out_channels, self.embedding_dim, T)
         
-        # 1. SIGNAL RECONSTRUCTION
-        
-        signals = self.out_conv(features)  # (B, 12, T)
-
-       
-        # 2. EMBEDDINGS
-        
-        embeddings = self.embedding_head(features)  # (B, 12*d, T)
-
-        # temporal pooling
-        embeddings = torch.mean(embeddings, dim=2)  # (B, 12*d)
-
-        # reshape
-        B = embeddings.shape[0]
-        embeddings = embeddings.view(B, 12, self.embedding_dim)
+        # Temporal pooling (Global Average Pooling on the time axis)
+        embeddings = torch.mean(lead_feat_reshaped, dim=-1) # Shape: (B, 12, d)
 
         return signals, embeddings
