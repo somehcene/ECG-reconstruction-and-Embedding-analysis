@@ -30,8 +30,12 @@ def train_pointnet(unet, train_loader, val_loader, epochs=10, lr=1e-3, device="c
             signals = signals.to(device)
             labels = labels.to(device)
 
-            # 1 lead input just like we did in Part 2
-            input_lead = signals[:, 0:1, :]
+            lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+
+            input_lead = torch.stack([
+                signals[i, idx:idx+1, :]
+                for i, idx in enumerate(lead_idx)
+            ])
 
             with torch.no_grad():
                 _, embeddings = unet(input_lead)
@@ -61,7 +65,12 @@ def train_pointnet(unet, train_loader, val_loader, epochs=10, lr=1e-3, device="c
                 signals = signals.to(device)
                 labels = labels.to(device)
 
-                input_lead = signals[:, 0:1, :]
+                lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+
+                input_lead = torch.stack([
+                    signals[i, idx:idx+1, :]
+                    for i, idx in enumerate(lead_idx)
+                ])
 
                 _, embeddings = unet(input_lead)
 
@@ -106,7 +115,12 @@ def test_pointnet(model, unet, test_loader, label_cols, device="cuda"):
             signals = signals.to(device)
             labels = labels.to(device)
 
-            input_lead = signals[:, 0:1, :]
+            lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+
+            input_lead = torch.stack([
+                signals[i, idx:idx+1, :]
+                for i, idx in enumerate(lead_idx)
+            ])
 
             _, embeddings = unet(input_lead)
 
