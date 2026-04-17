@@ -23,7 +23,12 @@ def train_one_epoch(model, loader, optimizer, device):
         signals = signals.to(device)  # (B, 12, T)
 
         # input = 1 lead
-        input_lead = signals[:, 0:1, :]   # lead I (exemple)
+        lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+
+        input_lead = torch.stack([
+            signals[i, idx:idx+1, :]
+            for i, idx in enumerate(lead_idx)
+        ])
         target = signals                 # 12 leads
 
         optimizer.zero_grad()
