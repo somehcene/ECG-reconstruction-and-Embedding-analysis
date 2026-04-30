@@ -106,107 +106,78 @@ def train_autoencoder(model, train_loader, val_loader, epochs=10, lr=1e-3, devic
         print(f"Val Corr: {val_corr:.4f}")
 
 
-def dtw_distance(x, y):
+def compute_lead_reconstruction_matrix(model, loader, device="cuda", n_samples=None):
     """
-    Simple DTW implementation (CPU, numpy-like)
-    x, y: (T,)
+    Computes a 12x12 reconstruction matrix M[i, j] where:
+        M[i, j] = mean MSE of reconstructing lead j when lead i is used as input.
+
+    The diagonal M[i, i] is set to NaN (trivial same-lead reconstruction).
+
+    Args:
+        model      : trained UNet1D model
+        loader     : DataLoader (test set)
+        device     : computation device
+        n_samples  : if not None, stop after processing approximately n_samples ECGs
+
+    Returns:
+        mse_matrix  : (12, 12) numpy array, NaN on diagonal
+        corr_matrix : (12, 12) numpy array, NaN on diagonal
     """
     import numpy as np
 
-    x = x.flatten()
-    y = y.flatten()
-
-    n, m = len(x), len(y)
-    dtw = np.full((n+1, m+1), np.inf)
-    dtw[0, 0] = 0
-
-    for i in range(1, n+1):
-        for j in range(1, m+1):
-            cost = abs(x[i-1] - y[j-1])
-            dtw[i, j] = cost + min(
-                dtw[i-1, j],    # insertion
-                dtw[i, j-1],    # deletion
-                dtw[i-1, j-1]   # match
-            )
-
-    return dtw[n, m]
-
-
-def test_autoencoder(model, test_loader, device="cuda"):
     model.eval()
-
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    total_mse = 0
-    total_corr = 0
-    total_dtw = 0
-    n = 0
+    n_leads = 12
+    mse_sums  = np.zeros((n_leads, n_leads))
+    corr_sums = np.zeros((n_leads, n_leads))
+    counts    = np.zeros((n_leads, n_leads))
+
+    n_processed = 0
 
     with torch.no_grad():
-        for signals, _ in test_loader:
+        for signals, _ in loader:
 
-            signals = signals.to(device)
+            if n_samples is not None and n_processed >= n_samples:
+                break
 
-            lead_idx = torch.randint(0, 12, (signals.shape[0],), device=signals.device)
+            signals    = signals.to(device)   # (B, 12, T)
+            batch_size = signals.shape[0]
 
-            input_lead = torch.stack([
-                signals[i, idx:idx+1, :]
-                for i, idx in enumerate(lead_idx)
-            ])
-            target = signals
+            for i in range(n_leads):
 
-            pred, _ = model(input_lead)
+                input_lead = signals[:, i:i+1, :]  # (B, 1, T)
+                pred, _    = model(input_lead)       # pred: (B, 12, T)
+                target     = signals                  # (B, 12, T)
 
-            
-            # MSE
-            
-            mse = torch.mean((pred - target) ** 2)
+                # MSE per output lead j  →  shape (12,)
+                mse_per_lead = ((pred - target) ** 2).mean(dim=(0, 2))
 
-            
-            # Pearson
-            
-            x = pred - pred.mean(dim=-1, keepdim=True)
-            y = target - target.mean(dim=-1, keepdim=True)
+                # Pearson correlation per output lead j  →  shape (B, 12) → mean (12,)
+                x = pred   - pred.mean(dim=-1, keepdim=True)
+                y = target - target.mean(dim=-1, keepdim=True)
+                corr_per_lead = (x * y).sum(dim=-1) / (
+                    torch.sqrt((x ** 2).sum(dim=-1) * (y ** 2).sum(dim=-1) + 1e-8)
+                )
+                corr_per_lead = corr_per_lead.mean(dim=0)  # (12,)
 
-            corr = torch.sum(x * y, dim=-1) / (
-                torch.sqrt(torch.sum(x**2, dim=-1) * torch.sum(y**2, dim=-1) + 1e-8)
-            )
+                for j in range(n_leads):
+                    mse_sums[i, j]  += mse_per_lead[j].item()
+                    corr_sums[i, j] += corr_per_lead[j].item()
+                    counts[i, j]    += 1
 
-            
-            # DTW (CPU)
-            
-            pred_np = pred.cpu().numpy()
-            target_np = target.cpu().numpy()
+            n_processed += batch_size
 
-            batch_dtw = 0
+    mse_matrix  = mse_sums  / counts
+    corr_matrix = corr_sums / counts
 
-            for b in range(pred_np.shape[0]):
-                for lead in range(pred_np.shape[1]):
-                    batch_dtw += dtw_distance(
-                        pred_np[b, lead],
-                        target_np[b, lead]
-                    )
+    # Mask diagonal (same-lead reconstruction is trivial)
+    np.fill_diagonal(mse_matrix,  np.nan)
+    np.fill_diagonal(corr_matrix, np.nan)
 
-            batch_dtw /= (pred_np.shape[0] * pred_np.shape[1])
+    print("\n===== LEAD RECONSTRUCTION MATRIX =====")
+    print(f"Mean MSE  (off-diagonal): {np.nanmean(mse_matrix):.4f}")
+    print(f"Mean Corr (off-diagonal): {np.nanmean(corr_matrix):.4f}")
 
-            
-            # Accumulate
-            
-            total_mse += mse.item()
-            total_corr += corr.mean().item()
-            total_dtw += batch_dtw
-            n += 1
-
-    final_mse = total_mse / n
-    final_rmse = final_mse ** 0.5
-    final_corr = total_corr / n
-    final_dtw = total_dtw / n
-
-    print("\n===== TEST RESULTS =====")
-    print(f"MSE:   {final_mse:.4f}")
-    print(f"RMSE:  {final_rmse:.4f}")
-    print(f"Corr:  {final_corr:.4f}")
-    print(f"DTW:   {final_dtw:.4f}")
-
-    return final_mse, final_rmse, final_corr, final_dtw
+    return mse_matrix, corr_matrix
